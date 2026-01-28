@@ -4,15 +4,20 @@ import cv2
 import numpy as np
 from PIL import Image
 import datetime
+import os
+import gdown  # Library untuk download dari Google Drive
 
 # ==========================================
-# 1. KONFIGURASI & LOAD MODEL
+# 1. KONFIGURASI HALAMAN
 # ==========================================
 st.set_page_config(page_title="Sistem Parkir ResNet50", layout="wide")
 
-# KOORDINAT SLOT PARKIR (Dummy / Contoh)
-# Tugas Kamu: Sesuaikan angka [x, y, w, h] ini dengan gambar CCTV aslimu nanti.
-# Caranya: Buka gambar di Paint, arahkan mouse, catat koordinatnya.
+# ==========================================
+# 2. KONFIGURASI SLOT PARKIR (ROI)
+# ==========================================
+# CATATAN PENTING:
+# Angka-angka di bawah ini [x, y, w, h] HANYA CONTOH.
+# Kamu HARUS mengubahnya sesuai posisi garis parkir di kamera/gambar CCTV kamu.
 PARKING_ROIS = {
     "A-01": [50, 360, 120, 100], 
     "A-02": [180, 360, 120, 100],
@@ -22,22 +27,50 @@ PARKING_ROIS = {
     "B-03": [310, 500, 120, 100]
 }
 
+# ==========================================
+# 3. FUNGSI DOWNLOAD & LOAD MODEL
+# ==========================================
+def download_model_from_drive():
+    # ID file diambil dari link Google Drive kamu:
+    # https://drive.google.com/file/d/1zLQ3-BoCn-9PCzFC2c2cYnkyIEzafc9n/view?usp=sharing
+    file_id = '1zLQ3-BoCn-9PCzFC2c2cYnkyIEzafc9n'
+    output = 'model_parkir_resnet50.h5'
+    
+    # Cek apakah file sudah ada, kalau belum download dulu
+    if not os.path.exists(output):
+        st.warning("⚠️ Model belum ditemukan. Sedang mendownload dari Google Drive... (Mohon Tunggu)")
+        try:
+            url = f'https://drive.google.com/uc?id={file_id}'
+            gdown.download(url, output, quiet=False)
+            st.success("✅ Download Selesai!")
+        except Exception as e:
+            st.error(f"Gagal download model: {e}")
+            return None
+    return output
+
 @st.cache_resource
 def load_learner():
-    # Load model ResNet50V2 High Accuracy
-    try:
-        model = tf.keras.models.load_model('model_parkir_resnet50.h5')
-        return model
-    except Exception as e:
+    model_path = download_model_from_drive()
+    if model_path and os.path.exists(model_path):
+        try:
+            # Load model ResNet50V2
+            model = tf.keras.models.load_model(model_path)
+            return model
+        except Exception as e:
+            st.error(f"Error saat load model: {e}")
+            return None
+    else:
+        st.error("File model tidak ditemukan.")
         return None
 
+# Load Model di awal
 model = load_learner()
 
 # ==========================================
-# 2. FUNGSI PRE-PROCESSING (Wajib sama dgn Training)
+# 4. FUNGSI PRE-PROCESSING (Wajib sama dgn Training)
 # ==========================================
 def preprocess_image(roi_image):
-    # 1. Resize ke 128x128 (Sesuai Training ResNet50 di Colab)
+    # 1. Resize ke 128x128 (Sesuai Training ResNet50 kamu)
     img = cv2.resize(roi_image, (128, 128))
     # 2. Normalisasi (0-255 jadi 0-1)
     img = img / 255.0
@@ -46,7 +79,7 @@ def preprocess_image(roi_image):
     return img
 
 # ==========================================
-# 3. USER INTERFACE (STREAMLIT)
+# 5. USER INTERFACE (STREAMLIT)
 # ==========================================
 st.title("🚗 Smart Parking System (ResNet50)")
 st.markdown("""
@@ -75,7 +108,7 @@ with col_cctv:
         
         # Cek apakah model berhasil di-load
         if model is None:
-            st.error("❌ File 'model_parkir_resnet50.h5' tidak ditemukan! Silakan upload ke folder proyek.")
+            st.error("❌ Model gagal dimuat. Cek koneksi internet untuk download model.")
         else:
             # LOOPING DETEKSI PER SLOT
             for slot_id, (x, y, w, h) in PARKING_ROIS.items():
@@ -92,7 +125,7 @@ with col_cctv:
                     processed_input = preprocess_image(roi_img)
                     prediction = model.predict(processed_input, verbose=0)[0][0]
                     
-                    # Logic: 0 = Empty, 1 = Occupied (Sesuai urutan folder alphabet)
+                    # Logic: 0 = Empty, 1 = Occupied (Sesuai training)
                     # Kita pakai threshold 0.5
                     is_occupied = prediction > 0.5
                     confidence = prediction if is_occupied else 1 - prediction
@@ -175,6 +208,3 @@ with col_info:
             </div>
             """
             st.markdown(ticket_html, unsafe_allow_html=True)
-            
-            # Di sini bisa tambahkan kode library printer thermal sungguhan jika ada alatnya
-            # import escpos...
