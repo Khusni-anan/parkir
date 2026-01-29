@@ -5,7 +5,7 @@ import numpy as np
 from PIL import Image
 import datetime
 import os
-import gdown  # Library untuk download dari Google Drive
+import gdown
 
 # ==========================================
 # 1. KONFIGURASI HALAMAN
@@ -13,32 +13,34 @@ import gdown  # Library untuk download dari Google Drive
 st.set_page_config(page_title="Sistem Parkir ResNet50", layout="wide")
 
 # ==========================================
-# 2. KONFIGURASI SLOT PARKIR (ROI)
+# 2. KONFIGURASI SLOT PARKIR (DATABASE KOORDINAT)
 # ==========================================
-# CATATAN PENTING:
-# Angka-angka di bawah ini [x, y, w, h] HANYA CONTOH.
-# Kamu HARUS mengubahnya sesuai posisi garis parkir di kamera/gambar CCTV kamu.
+# Ini adalah Estimasi Koordinat untuk gambar 'carParkImg.jpg'
+# Fokus pada area tengah (Vertical Parking)
 PARKING_ROIS = {
-    "A-01": [50, 360, 120, 100], 
-    "A-02": [180, 360, 120, 100],
-    "A-03": [310, 360, 120, 100],
-    "B-01": [50, 500, 120, 100],
-    "B-02": [180, 500, 120, 100],
-    "B-03": [310, 500, 120, 100]
+    # --- KOLOM TENGAH KIRI ---
+    "TL-01": [375, 125, 60, 90],  # Mobil Silver/Putih Atas
+    "TL-02": [375, 220, 60, 90],  # Mobil Hitam/Gelap
+    "TL-03": [375, 315, 60, 90],  # Pickup Merah
+    "TL-04": [375, 410, 60, 90],  # Mobil Abu-abu
+    "TL-05": [375, 505, 60, 90],  # Mobil Merah
+    
+    # --- KOLOM TENGAH KANAN ---
+    "TR-01": [470, 125, 60, 90],  # Mobil Hitam Atas
+    "TR-02": [470, 220, 60, 90],  # Mobil Hitam
+    "TR-03": [470, 315, 60, 90],  # Mobil Putih (Dekat orang lewat)
+    "TR-04": [470, 410, 60, 90],  # Mobil Merah Marun
+    "TR-05": [470, 505, 60, 90],  # Mobil Hitam
 }
 
 # ==========================================
 # 3. FUNGSI DOWNLOAD & LOAD MODEL
 # ==========================================
 def download_model_from_drive():
-    # ID file diambil dari link Google Drive kamu:
-    # https://drive.google.com/file/d/1zLQ3-BoCn-9PCzFC2c2cYnkyIEzafc9n/view?usp=sharing
     file_id = '1zLQ3-BoCn-9PCzFC2c2cYnkyIEzafc9n'
     output = 'model_parkir_resnet50.h5'
-    
-    # Cek apakah file sudah ada, kalau belum download dulu
     if not os.path.exists(output):
-        st.warning("⚠️ Model belum ditemukan. Sedang mendownload dari Google Drive... (Mohon Tunggu)")
+        st.warning("⚠️ Sedang mendownload model... (Mohon Tunggu)")
         try:
             url = f'https://drive.google.com/uc?id={file_id}'
             gdown.download(url, output, quiet=False)
@@ -50,161 +52,136 @@ def download_model_from_drive():
 
 @st.cache_resource
 def load_learner():
-    model_path = download_model_from_drive()
-    if model_path and os.path.exists(model_path):
+    path = download_model_from_drive()
+    if path: 
         try:
-            # Load model ResNet50V2
-            model = tf.keras.models.load_model(model_path)
-            return model
-        except Exception as e:
-            st.error(f"Error saat load model: {e}")
+            return tf.keras.models.load_model(path)
+        except:
             return None
-    else:
-        st.error("File model tidak ditemukan.")
-        return None
+    return None
 
-# Load Model di awal
 model = load_learner()
 
 # ==========================================
-# 4. FUNGSI PRE-PROCESSING (Wajib sama dgn Training)
+# 4. FUNGSI PRE-PROCESSING
 # ==========================================
 def preprocess_image(roi_image):
-    # 1. Resize ke 128x128 (Sesuai Training ResNet50 kamu)
     img = cv2.resize(roi_image, (128, 128))
-    # 2. Normalisasi (0-255 jadi 0-1)
     img = img / 255.0
-    # 3. Tambah dimensi batch (jadi 1, 128, 128, 3)
     img = np.expand_dims(img, axis=0)
     return img
 
 # ==========================================
-# 5. USER INTERFACE (STREAMLIT)
+# 5. USER INTERFACE
 # ==========================================
 st.title("🚗 Smart Parking System (ResNet50)")
-st.markdown("""
-<style>
-    .big-font { font-size:20px !important; }
-    .metric-box { border: 1px solid #ddd; padding: 10px; border-radius: 5px; text-align: center;}
-</style>
-""", unsafe_allow_html=True)
 
-st.write("Sistem deteksi ketersediaan slot parkir berbasis **Deep Learning (ResNet50V2)** dengan akurasi **99.6%**.")
+# --- SIDEBAR: MODE SETUP ---
+st.sidebar.header("🔧 Pengaturan")
+st.sidebar.info("Gunakan mode ini jika kotak parkir meleset/tidak pas.")
+setup_mode = st.sidebar.checkbox("Aktifkan Mode Setup Koordinat")
 
 col_cctv, col_info = st.columns([2, 1])
 
-# --- KOLOM KIRI: CCTV & DETEKSI ---
+# --- KOLOM KIRI: CCTV ---
 with col_cctv:
     st.subheader("📡 Monitor CCTV")
-    uploaded_file = st.file_uploader("Upload Gambar Simulasi CCTV", type=['jpg', 'png', 'jpeg'])
+    uploaded_file = st.file_uploader("Upload Gambar CCTV", type=['jpg', 'png', 'jpeg'])
     
-    empty_slots = [] # List slot kosong
+    empty_slots = []
     
     if uploaded_file is not None:
-        # Baca file gambar
         file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
         frame = cv2.imdecode(file_bytes, 1)
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
-        # Cek apakah model berhasil di-load
-        if model is None:
-            st.error("❌ Model gagal dimuat. Cek koneksi internet untuk download model.")
-        else:
-            # LOOPING DETEKSI PER SLOT
-            for slot_id, (x, y, w, h) in PARKING_ROIS.items():
-                # Safety check: Pastikan koordinat tidak keluar batas gambar
-                img_h, img_w, _ = frame.shape
-                if y+h > img_h or x+w > img_w:
-                    continue 
+        # --- LOGIKA A: MODE SETUP (JIKA DIAKTIFKAN) ---
+        if setup_mode:
+            st.warning("⚠️ MODE SETUP AKTIF: Geser slider untuk mencari koordinat baru.")
+            
+            # Slider Pengatur Kotak
+            col_x, col_y = st.columns(2)
+            with col_x:
+                x_val = st.slider("Posisi X (Kiri-Kanan)", 0, frame.shape[1], 375)
+                w_val = st.slider("Lebar Kotak (Width)", 10, 200, 60)
+            with col_y:
+                y_val = st.slider("Posisi Y (Atas-Bawah)", 0, frame.shape[0], 125)
+                h_val = st.slider("Tinggi Kotak (Height)", 10, 200, 90)
+            
+            # Gambar kotak kuning (preview)
+            cv2.rectangle(frame_rgb, (x_val, y_val), (x_val+w_val, y_val+h_val), (0, 255, 255), 3)
+            st.image(frame_rgb, channels="RGB", use_column_width=True)
+            
+            # Tampilkan Kodingan untuk di-Copy
+            st.success("👇 Copy kode ini & ganti di bagian PARKING_ROIS:")
+            st.code(f'"SLOT-BARU": [{x_val}, {y_val}, {w_val}, {h_val}],')
 
-                # 1. Crop Gambar
-                roi_img = frame[y:y+h, x:x+w]
+        # --- LOGIKA B: MODE NORMAL (DETEKSI) ---
+        else:
+            if model is not None:
+                for slot_id, (x, y, w, h) in PARKING_ROIS.items():
+                    # Safety check agar tidak error jika kotak keluar gambar
+                    if y+h > frame.shape[0] or x+w > frame.shape[1]: continue
+
+                    roi_img = frame[y:y+h, x:x+w]
+                    if roi_img.size != 0:
+                        processed_input = preprocess_image(roi_img)
+                        prediction = model.predict(processed_input, verbose=0)[0][0]
+                        
+                        # Threshold 0.5
+                        is_occupied = prediction > 0.5
+                        confidence = prediction if is_occupied else 1 - prediction
+                        
+                        if is_occupied:
+                            color = (255, 0, 0) # Merah
+                            thickness = 2
+                            label_text = ""
+                        else:
+                            color = (0, 255, 0) # Hijau
+                            thickness = 3
+                            empty_slots.append(slot_id)
+                            label_text = "KOSONG"
+                        
+                        # Gambar Kotak & Label
+                        cv2.rectangle(frame_rgb, (x, y), (x+w, y+h), color, thickness)
+                        # Label Background
+                        cv2.rectangle(frame_rgb, (x, y-15), (x+w, y), color, -1)
+                        cv2.putText(frame_rgb, slot_id, (x+2, y-3), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
                 
-                # 2. Prediksi
-                if roi_img.size != 0:
-                    processed_input = preprocess_image(roi_img)
-                    prediction = model.predict(processed_input, verbose=0)[0][0]
-                    
-                    # Logic: 0 = Empty, 1 = Occupied (Sesuai training)
-                    # Kita pakai threshold 0.5
-                    is_occupied = prediction > 0.5
-                    confidence = prediction if is_occupied else 1 - prediction
-                    
-                    # 3. Visualisasi (Hijau = Kosong, Merah = Isi)
-                    if is_occupied:
-                        color = (255, 0, 0) # Merah
-                        label = f"ISI ({confidence:.0%})"
-                        thickness = 2
-                    else:
-                        color = (0, 255, 0) # Hijau
-                        label = "KOSONG"
-                        thickness = 3
-                        empty_slots.append(slot_id)
-                    
-                    # Gambar kotak
-                    cv2.rectangle(frame_rgb, (x, y), (x+w, y+h), color, thickness)
-                    # Gambar label background biar tulisan jelas
-                    cv2.rectangle(frame_rgb, (x, y-20), (x+w, y), color, -1) 
-                    cv2.putText(frame_rgb, f"{slot_id}", (x+5, y-5), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                st.image(frame_rgb, channels="RGB", use_column_width=True, caption="Real-time Detection")
 
-            # Tampilkan Gambar Final
-            st.image(frame_rgb, channels="RGB", use_column_width=True, caption="Real-time Detection")
-
-# --- KOLOM KANAN: TIKET & STATUS ---
+# --- KOLOM KANAN: STATUS ---
 with col_info:
-    st.subheader("📊 Status Parkir")
-    
-    total_slots = len(PARKING_ROIS)
-    available_slots = len(empty_slots)
-    
-    # Tampilkan Metrik
-    col_stat1, col_stat2 = st.columns(2)
-    col_stat1.metric("Total Slot", total_slots)
-    col_stat2.metric("Tersedia", available_slots, delta_color="normal")
-    
-    st.divider()
-    
-    st.subheader("🖨️ Kiosk Tiket")
-    st.write("Tekan tombol jika ada kendaraan masuk.")
-    
-    if st.button("CETAK TIKET MASUK", type="primary", use_container_width=True):
+    # Hanya tampilkan info jika TIDAK dalam mode setup
+    if not setup_mode:
+        st.subheader("📊 Status Parkir")
+        
         if uploaded_file is None:
-            st.warning("⚠️ CCTV belum aktif!")
-        elif available_slots == 0:
-            st.error("⛔ MAAF PARKIRAN PENUH!")
+            st.info("Upload gambar CCTV dulu.")
         else:
-            # Algoritma: Pilih slot kosong pertama
-            assigned_slot = empty_slots[0]
-            waktu_masuk = datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+            total_slots = len(PARKING_ROIS)
+            available_slots = len(empty_slots)
             
-            st.success(f"✅ Tiket Dicetak untuk Slot: {assigned_slot}")
+            col_s1, col_s2 = st.columns(2)
+            col_s1.metric("Total Slot", total_slots)
+            col_s2.metric("Tersedia", available_slots)
             
-            # Simulasi Struk Thermal Printer
-            ticket_html = f"""
-            <div style="
-                background-color: #fff; 
-                border: 1px dashed #000; 
-                padding: 15px; 
-                width: 100%; 
-                font-family: 'Courier New', Courier, monospace;
-                text-align: center;
-                box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
-                color: black;
-            ">
-                <h4 style="margin:0;">MALL SKRIPSI</h4>
-                <p style="font-size: 12px; margin:5px;">Jl. Teknologi No. 1</p>
-                <hr style="border-top: 1px dashed #000;">
-                <div style="text-align: left; font-size: 14px;">
-                    <p>Waktu : {waktu_masuk}</p>
-                    <p>Gate  : UTAMA-01</p>
-                </div>
-                <hr style="border-top: 1px dashed #000;">
-                <h2 style="font-size: 32px; margin: 10px 0;">{assigned_slot}</h2>
-                <p style="font-size: 12px;">Silakan parkir di area tersebut</p>
-                <hr style="border-top: 1px dashed #000;">
-                <img src="https://bwipjs-api.metafloor.com/?bcid=code128&text={assigned_slot}&scale=2" alt="barcode" style="width:80%;">
-                <p style="font-size: 10px; margin-top:5px;">Terima Kasih</p>
-            </div>
-            """
-            st.markdown(ticket_html, unsafe_allow_html=True)
+            st.divider()
+            
+            st.subheader("🖨️ Kiosk Tiket")
+            if st.button("CETAK TIKET", type="primary", use_container_width=True):
+                if available_slots > 0:
+                    slot_pilihan = empty_slots[0]
+                    waktu = datetime.datetime.now().strftime("%H:%M")
+                    
+                    st.success(f"✅ Tiket Dicetak: {slot_pilihan}")
+                    st.markdown(f"""
+                    <div style="border:1px dashed #000; padding:10px; text-align:center;">
+                        <h3>TIKET PARKIR</h3>
+                        <p>Slot: <b>{slot_pilihan}</b></p>
+                        <p>Jam: {waktu}</p>
+                        <img src="https://bwipjs-api.metafloor.com/?bcid=code128&text={slot_pilihan}&scale=2" width="70%">
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.error("⛔ Parkiran Penuh!")
