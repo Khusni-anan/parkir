@@ -21,7 +21,7 @@ st.markdown("Sistem deteksi parkir berbasis Deep Learning (ResNet50) dengan inte
 # Ganti ID di bawah ini dengan ID File .h5 dari Link Share Google Drive Anda
 # Contoh Link: https://drive.google.com/file/d/1A-BcDeFg.../view
 # ID-nya adalah: 1A-BcDeFg...
-GDRIVE_FILE_ID = 'https://drive.google.com/file/d/1zLQ3-BoCn-9PCzFC2c2cYnkyIEzafc9n/view?usp=drive_link' 
+GDRIVE_FILE_ID = '1zLQ3-BoCn-9PCzFC2c2cYnkyIEzafc9n/view?usp=drive_link' 
 
 MODEL_FILENAME = 'model_parkir_resnet50.h5'
 POS_FILENAME = 'CarParkPos'
